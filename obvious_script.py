@@ -2,13 +2,15 @@ import bpy
 import math
 import sys
 import os
+import json
 from mathutils import Vector, Euler, Matrix
 import bmesh
 import yaml
 import ast
 import random
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, MultiPolygon
+from shapely.ops import unary_union
 
 COLORS = {
     "red": [1, 0, 0, 1],
@@ -35,7 +37,7 @@ class Heightmap:
     def __init__(self):
         self.height = {}
         self.height_list = []
-    
+
     def update_heightmap(self, position, size, rotation):
         """
         Update the heightmap with a block at a given position and size.
@@ -55,7 +57,7 @@ class Heightmap:
             current_multipolygon = self.height[new_height]
             if current_multipolygon.intersects(polygon):
                 raise ValueError("polygons intersect!")
-            
+
             new_multipoly = current_multipolygon.union(polygon)
             self.height[new_height] = new_multipoly
 
@@ -93,7 +95,7 @@ class Heightmap:
             normal = (math.sin(degree), 0, math.cos(degree))
             if not point:
                 point = (1.5, 0, 2.5)
-        
+
         a = normal[0]
         b = 0
         c = normal[2]
@@ -106,15 +108,15 @@ class Heightmap:
 
         x = np.random.uniform(PROJECTION_X[0], PROJECTION_X[1], n_points)
         y = np.random.uniform(PROJECTION_Y[0], PROJECTION_Y[1], n_points)
-        
+
         z_plane = (-a*x - b*y - d) / c
-        
+
         noise = np.random.normal(0, noise_level, n_points)
-        
+
         X = np.column_stack([x, y, np.ones_like(x)])
         coefficients = np.linalg.lstsq(X, noise, rcond=None)[0]
         adjusted_noise = noise - X.dot(coefficients)
-        
+
         z = z_plane + adjusted_noise
 
         processed_z = []
@@ -160,7 +162,7 @@ class Heightmap:
                     new_polygon = self.get_polygon(position, size, rotation)
                     pos_multipoly = self.height[position[2]-size[2]/2]
                     if pos_multipoly.intersection(new_polygon).area >= INTERSECTION_THRESHOLD:
-                    #if pos_multipoly.intersects(new_polygon):
+                        #if pos_multipoly.intersects(new_polygon):
                         valid_positions.append(position)
                         valid_counts += 1
         sorted_positions = sorted(valid_positions, key=lambda t:t[2])
@@ -169,7 +171,7 @@ class Heightmap:
 class CollisionDetector:
     def __init__(self):
         pass
-    
+
     def get_block_vertices(self, position, size, rotation):
         """
         Get the 8 vertices of a block given its position, size, and rotation.
@@ -178,10 +180,10 @@ class CollisionDetector:
         half_l = l / 2
         half_w = w / 2
         half_h = h / 2
-        
+
         # Create rotation matrix from Euler angles
         rotation_matrix = Euler(rotation, 'XYZ').to_matrix().to_4x4()
-        
+
         # 8 vertices in local space
         local_vertices = [
             Vector(( half_l,  half_w,  half_h)),
@@ -193,7 +195,7 @@ class CollisionDetector:
             Vector((-half_l, -half_w,  half_h)),
             Vector((-half_l, -half_w, -half_h))
         ]
-        
+
         # apply rotation and translation to get world coordinates
         world_vertices = []
         for vertex in local_vertices:
@@ -201,25 +203,25 @@ class CollisionDetector:
 
             world_vertex = Vector(position) + rotated_vertex
             world_vertices.append(world_vertex)
-        
+
         return world_vertices
-    
+
     def get_block_faces(self, vertices):
         """
         Get the faces of a block given its vertices.
         Each face is represented by a list of vertices.
         """
         faces = [
-            [0, 1, 3, 2],  
-            [4, 5, 7, 6],  
-            [0, 4, 6, 2],  
-            [1, 5, 7, 3],  
-            [0, 1, 5, 4],  
-            [2, 3, 7, 6]   
+            [0, 1, 3, 2],
+            [4, 5, 7, 6],
+            [0, 4, 6, 2],
+            [1, 5, 7, 3],
+            [0, 1, 5, 4],
+            [2, 3, 7, 6]
         ]
-        
+
         return [[vertices[i] for i in face] for face in faces]
-    
+
     def separating_axis_theorem(self, vertices1, vertices2):
         """
         Check for collision between two sets of vertices using the Separating Axis Theorem (SAT).
@@ -227,17 +229,17 @@ class CollisionDetector:
         """
         # get all possible separating axes
         normals = self.get_all_separating_axes(vertices1, vertices2)
-        
+
         # check each axis
         for normal in normals:
             min1, max1 = self.project_vertices(vertices1, normal)
             min2, max2 = self.project_vertices(vertices2, normal)
-            
+
             if max1 <= min2 or max2 <= min1:
                 return False
         # If no separating axis found, there is a collision
         return True
-    
+
     def get_all_separating_axes(self, vertices1, vertices2):
         """
         Get all possible separating axes for two sets of vertices.
@@ -245,24 +247,24 @@ class CollisionDetector:
         """
         faces1 = self.get_block_faces(vertices1)
         normals1 = [self.get_face_normal(face) for face in faces1]
-        
+
         faces2 = self.get_block_faces(vertices2)
         normals2 = [self.get_face_normal(face) for face in faces2]
-        
+
         edge_normals = []
         for i in range(len(faces1)):
             for j in range(len(faces2)):
                 edges1 = self.get_face_edges(faces1[i])
                 edges2 = self.get_face_edges(faces2[j])
-                
+
                 for edge1 in edges1:
                     for edge2 in edges2:
                         cross = edge1.cross(edge2)
                         if cross.length > 0.001:  # To avoid zero-length normals
                             edge_normals.append(cross.normalized())
-        
+
         all_normals = normals1 + normals2 + edge_normals
-        
+
         unique_normals = []
         seen = set()
         for normal in all_normals:
@@ -271,9 +273,9 @@ class CollisionDetector:
             if key not in seen:
                 seen.add(key)
                 unique_normals.append(normal)
-        
+
         return unique_normals
-    
+
     def get_face_normal(self, face_vertices):
         """
         Calculate the normal vector of a face given its vertices.
@@ -282,13 +284,13 @@ class CollisionDetector:
         v0 = face_vertices[0]
         v1 = face_vertices[1]
         v2 = face_vertices[2]
-        
+
         edge1 = v1 - v0
         edge2 = v2 - v0
-        
+
         normal = edge1.cross(edge2).normalized()
         return normal
-    
+
     def get_face_edges(self, face_vertices):
         """
         Get the edges of a face defined by its vertices.
@@ -301,7 +303,7 @@ class CollisionDetector:
             edge = face_vertices[j] - face_vertices[i]
             edges.append(edge)
         return edges
-    
+
     def project_vertices(self, vertices, axis):
         """
         Project the vertices onto a given axis and return the min and max values.
@@ -309,35 +311,219 @@ class CollisionDetector:
         """
         min_val = float('inf')
         max_val = float('-inf')
-        
+
         for vertex in vertices:
             projection = vertex.dot(axis)
-            
+
             if projection < min_val:
                 min_val = projection
             if projection > max_val:
                 max_val = projection
-        
+
         return min_val, max_val
-    
+
     def check_block_collision(self, existing_blocks, new_position, new_size, new_rotation):
         """
         Check if a new block collides with existing blocks in the scene.
         """
         new_vertices = self.get_block_vertices(new_position, new_size, new_rotation)
-        
+
         for block in existing_blocks:
-                
+
             existing_vertices = self.get_block_vertices(
-                block['position'], 
-                block['size'], 
+                block['position'],
+                block['size'],
                 block['rotation']
             )
-            
+
             if self.separating_axis_theorem(new_vertices, existing_vertices):
-                return True  
-        
-        return False  
+                return True
+
+        return False
+
+class FeatureSampler:
+    """
+    统一控制以下特征的分布尽量均匀：
+      - 深度 D
+      - 对称性 S
+      - 重心 Gx, Gy, Gz
+    通过在 (D,S) 的 2D 网格 和 (Gx,Gy,Gz) 的 3D 网格上做均匀“占坑”。
+    """
+    def __init__(self,
+                 bins_DS=(6, 6),
+                 bins_G=(6, 6, 6),
+                 lims_D=(0.0, 0.6),
+                 lims_S=(0.0, 0.8),
+                 lims_Gx=(-1.5, 1.5),
+                 lims_Gy=(-0.8, 0.8),
+                 lims_Gz=(1.0, 5.0)):
+        # 网格尺寸
+        self.bins_DS = bins_DS
+        self.bins_G = bins_G
+
+        # 范围
+        self.lims = {
+            "D":  lims_D,
+            "S":  lims_S,
+            "Gx": lims_Gx,
+            "Gy": lims_Gy,
+            "Gz": lims_Gz,
+        }
+
+        # 计数直方图
+        self.hist_DS = np.zeros(bins_DS, dtype=int)   # (D,S) 的 2D 直方图
+        self.hist_G  = np.zeros(bins_G,  dtype=int)   # (Gx,Gy,Gz) 的 3D 直方图
+
+        # 记录所有已接受场景的特征
+        self.records = []  # 每条记录: (D, S, Gx, Gy, Gz)
+
+    @staticmethod
+    def _to_bin(value, vmin, vmax, nbins):
+        # 把连续值裁剪到 [vmin, vmax] 并映射到 [0, nbins-1]
+        value = max(vmin, min(vmax, value))
+        if vmax == vmin:  # 保险
+            return 0
+        return int((value - vmin) / (vmax - vmin) * (nbins - 1))
+
+    def get_bin_index_DS(self, D, S):
+        i = self._to_bin(D, *self.lims["D"],  self.bins_DS[0])
+        j = self._to_bin(S, *self.lims["S"],  self.bins_DS[1])
+        return (i, j)
+
+    def get_bin_index_G(self, Gx, Gy, Gz):
+        a = self._to_bin(Gx, *self.lims["Gx"], self.bins_G[0])
+        b = self._to_bin(Gy, *self.lims["Gy"], self.bins_G[1])
+        c = self._to_bin(Gz, *self.lims["Gz"], self.bins_G[2])
+        return (a, b, c)
+
+    def accept_scene(self, D, S, Gx, Gy, Gz,
+                     max_density_DS=4,
+                     max_density_G=4):
+        """
+        判断是否接受该场景：
+        - (D,S) 所在的网格格子里，样本数 < max_density_DS
+        - (Gx,Gy,Gz) 所在的格子里，样本数 < max_density_G
+        两者都没超，就接受。
+        """
+        idx_DS = self.get_bin_index_DS(D, S)
+        idx_G  = self.get_bin_index_G(Gx, Gy, Gz)
+
+        if self.hist_DS[idx_DS] >= max_density_DS:
+            return False
+        if self.hist_G[idx_G] >= max_density_G:
+            return False
+
+        # 占坑并记录
+        self.hist_DS[idx_DS] += 1
+        self.hist_G[idx_G]   += 1
+        self.records.append((float(D), float(S), float(Gx), float(Gy), float(Gz)))
+        return True
+
+    def save_distribution(self, dirpath, prefix="feature_distribution"):
+        """
+        把当前分布信息保存成两个 json：
+          - 前缀_DS_G.json：记录 bins / lims / hist / records
+          - 方便你之后画图看均匀程度
+        """
+        os.makedirs(dirpath, exist_ok=True)
+        path = os.path.join(dirpath, f"{prefix}.json")
+        data = {
+            "bins_DS": self.bins_DS,
+            "bins_G":  self.bins_G,
+            "lims":    self.lims,
+            "hist_DS": self.hist_DS.tolist(),
+            "hist_G":  self.hist_G.tolist(),
+            "records": self.records
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        print(f"📊 特征分布已保存到: {path}")
+
+def check_stability_simulation(blocks_data, ped_num, threshold=0.03, frames=60):
+    """
+    运行快速物理模拟来检测塔是否稳定。
+    Args:
+        blocks_data: 积木数据
+        ped_num: 底部基座积木的数量（通常认为基座是固定的或作为基础）
+        threshold: 判定为移动/倒塌的位移阈值（米）
+        frames: 模拟帧数（通常60帧/2秒足够判断是否立即倒塌）
+    Returns:
+        bool: True 表示稳定，False 表示倒塌
+    """
+    scene = bpy.context.scene
+
+    # 1. 为所有积木添加物理属性 (Active Rigid Body)
+    for block in blocks_data:
+        obj_name = f"block_{block['index']}"
+        obj = bpy.data.objects.get(obj_name)
+        if obj:
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.rigidbody.object_add()
+            obj.rigid_body.type = 'ACTIVE'
+            # 使用原脚本定义的摩擦力，或者为了严格稳定测试，稍微降低一点摩擦力
+            obj.rigid_body.friction = 0.5
+            obj.rigid_body.mass = 1.0
+            # 碰撞形状设为 BOX 提高计算速度和精度
+            obj.rigid_body.collision_shape = 'BOX'
+
+    # 确保有物理世界
+    if scene.rigidbody_world is None:
+        bpy.ops.rigidbody.world_add()
+
+    rw = scene.rigidbody_world
+    rw.point_cache.frame_start = 1
+    rw.point_cache.frame_end = frames
+
+    # 2. 烘焙物理 (Bake)
+    # 先清除旧缓存
+    bpy.ops.ptcache.free_bake_all()
+    # 烘焙
+    try:
+        bpy.ops.ptcache.bake_all(bake=True)
+    except RuntimeError:
+        # 有时没有缓存可烘焙会报错，忽略
+        pass
+
+    # 3. 检查位移
+    is_stable = True
+    scene.frame_set(frames) # 跳转到模拟结束帧
+
+    for block in blocks_data:
+        # 跳过基座积木的严格检测（如果基座被设计为不动的话），或者全部检测
+        obj_name = f"block_{block['index']}"
+        obj = bpy.data.objects.get(obj_name)
+        if not obj: continue
+
+        # 计算位移距离
+        current_pos = obj.matrix_world.translation
+        original_pos = Vector(block['position'])
+        displacement = (current_pos - original_pos).length
+
+        # 如果任何一个积木位移超过阈值，视为不稳定
+        if displacement > threshold:
+            is_stable = False
+            # print(f"Block {block['index']} unstable. Disp: {displacement:.3f}")
+            break
+
+    # 4. 清理与重置 (非常重要！)
+    # 我们需要把场景恢复到初始状态，以便后续渲染生成的视频是从头开始的
+    bpy.ops.ptcache.free_bake_all()
+    scene.frame_set(1)
+
+    # 移除刚体，防止干扰后续逻辑（后续 physics_render 会重新添加）
+    for block in blocks_data:
+        obj_name = f"block_{block['index']}"
+        obj = bpy.data.objects.get(obj_name)
+        if obj:
+            # 移除刚体属性
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.rigidbody.object_remove()
+
+            # 强制重置位置和旋转（消除模拟产生的微小抖动）
+            obj.location = Vector(block['position'])
+            obj.rotation_euler = Euler(block['rotation'])
+
+    return is_stable
 
 def clear_scene():
     bpy.ops.object.select_all(action='SELECT')
@@ -351,13 +537,13 @@ def clear_scene():
 
     for block in bpy.data.images:
         bpy.data.images.remove(block)
-    
+
     for block in bpy.data.cameras:
         bpy.data.cameras.remove(block)
-    
+
     for block in bpy.data.lights:
         bpy.data.lights.remove(block)
-    
+
     for block in bpy.data.actions:
         bpy.data.actions.remove(block)
 
@@ -404,6 +590,73 @@ def create_camera_animation(camera, target_loc=(0, 0, 2.5)):
             empty.rotation_euler = (0, 0, math.radians(360))
 
         empty.keyframe_insert(data_path="rotation_euler", frame=frame)
+
+def render_two_views(index, config, output_dir="renders", resolution=(800, 800)):
+    """
+    从红绿分界线前后两个方向拍静态图；临时切换输出为 PNG，渲染后恢复原设置。
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    scene = bpy.context.scene
+    num_blocks = config['Scene'].get("num_blocks")
+
+    # —— 保存旧设置（可能是 FFMPEG 等动画格式）——
+    prev_engine = scene.render.engine
+    prev_resx, prev_resy = scene.render.resolution_x, scene.render.resolution_y
+    prev_file_format = scene.render.image_settings.file_format
+    prev_filepath = scene.render.filepath
+    prev_use_ext = scene.render.use_file_extension
+    prev_ffmpeg_format = getattr(scene.render, "ffmpeg", None).format if hasattr(scene.render, "ffmpeg") else None
+
+    try:
+        # —— 切到静帧图片设置 ——
+        scene.render.engine = 'CYCLES'
+        scene.render.resolution_x, scene.render.resolution_y = resolution
+        scene.cycles.samples = 128
+        scene.render.image_settings.file_format = 'PNG'   # ☆ 关键：避免“动画格式”单帧写入报错
+        scene.render.use_file_extension = True
+
+        # 删除旧相机（避免多个相机干扰）
+        for obj in list(bpy.data.objects):
+            if obj.type == 'CAMERA':
+                bpy.data.objects.remove(obj, do_unlink=True)
+
+        # 两个观察位：沿 x=0 分界线，从 -Y 和 +Y 看向原点
+        camera_positions = [
+            {"name": "front", "location": (0, -15, 3), "rotation": (math.radians(90), 0, 0)},
+            {"name": "back",  "location": (0,  15, 3), "rotation": (math.radians(90), 0, math.radians(180))},
+        ]
+
+        for cam in camera_positions:
+            cam_data = bpy.data.cameras.new(f"Cam_{cam['name']}")
+            cam_obj = bpy.data.objects.new(f"Cam_{cam['name']}", cam_data)
+            scene.collection.objects.link(cam_obj)
+            scene.camera = cam_obj
+
+            cam_obj.location = cam["location"]
+            cam_obj.rotation_euler = Euler(cam["rotation"], 'XYZ')
+
+            # 设置输出路径（带 .png 后缀更稳）
+            img_path = os.path.join(output_dir, f"{RED_OR_GREEN}_{num_blocks}_{STABILITY}_{index}_{cam['name']}.png")
+            scene.render.filepath = img_path
+
+            # 渲染静帧
+            bpy.ops.render.render(write_still=True)
+            print(f"✅ 场景 {index} 已保存视角 {cam['name']} 图像：{img_path}")
+
+        # 清理相机
+        for obj in list(bpy.data.objects):
+            if obj.type == 'CAMERA':
+                bpy.data.objects.remove(obj, do_unlink=True)
+
+    finally:
+        # —— 恢复原设置 ——
+        scene.render.engine = prev_engine
+        scene.render.resolution_x, scene.render.resolution_y = prev_resx, prev_resy
+        scene.render.image_settings.file_format = prev_file_format
+        scene.render.filepath = prev_filepath
+        scene.render.use_file_extension = prev_use_ext
+        if hasattr(scene.render, "ffmpeg") and prev_ffmpeg_format is not None:
+            scene.render.ffmpeg.format = prev_ffmpeg_format
 
 def setup_light(light_type='POINT'):
     """
@@ -476,7 +729,7 @@ def create_material(obj, color, mat_name):
     obj.visible_diffuse = False
     obj.visible_glossy = False
     obj.visible_transmission = False
-    
+
     cycles_obj = obj.cycles
     cycles_obj.is_shadow_catcher = False
     #cycles_obj.case_shadow = False
@@ -521,7 +774,7 @@ def create_red_green_ground():
     ground.visible_diffuse = False
     ground.visible_glossy = False
     ground.visible_transmission = False
-    
+
     cycles_obj = ground.cycles
     cycles_obj.is_shadow_catcher = False
     cycles_obj.diffuse_bounce = 0
@@ -547,15 +800,15 @@ def create_block_mesh(size):
 
     bm = bmesh.new()
     bmesh.ops.create_cube(bm, size=1.0)
-    
+
     scale_matrix = Matrix((
     (size[0], 0, 0, 0),
     (0, size[1], 0, 0),
     (0, 0, size[2], 0),
     (0, 0, 0, 1)
-))
+    ))
     bmesh.ops.transform(bm, matrix=scale_matrix, verts=bm.verts)
-    
+
     mesh = bpy.data.meshes.new(mesh_name)
     bm.to_mesh(mesh)
     bm.free()
@@ -572,7 +825,7 @@ def generate_a_block(block_data):
     pos = block_data['position']
     rot = block_data['rotation']
     mesh = create_block_mesh(size)
-    
+
     obj = bpy.data.objects.new(f"block_{index}", mesh)
     obj.location = Vector(pos)
     obj.rotation_euler = Euler(rot)
@@ -641,6 +894,7 @@ def get_block_position(existing_blocks, heightmap, collisiondetector, new_size, 
     """
     valid_positions = heightmap.get_valid_positions(new_size, new_rot, flag, red_or_green)
     if not valid_positions:
+        return None
         raise ValueError("No valid positions available for the block.")
     while valid_positions:
         if np.random.uniform(0.0, 1.0) < FATNESS:
@@ -651,6 +905,7 @@ def get_block_position(existing_blocks, heightmap, collisiondetector, new_size, 
         if not collisiondetector.check_block_collision(existing_blocks, position, new_size, new_rot):
             heightmap.update_heightmap(position, new_size, new_rot)
             return position
+    return None
     raise ValueError("No valid position found for the block after checking all options.")
 
 def generate_blocks_data(config, heightmap, collisiondetector, red_or_green):
@@ -681,7 +936,7 @@ def generate_blocks_data(config, heightmap, collisiondetector, red_or_green):
         rot_range = config['Scene']['rot_range']#[0, 90, 180, 270]
         rot_range = [math.radians(rot_range[i]) for i in range(len(rot_range))]
     mat = config['Scene']['material']#'wood'
-    
+
     ped_num = random.randint(2, 5)
     for i in range(num_blocks):
         if i < ped_num:
@@ -690,6 +945,8 @@ def generate_blocks_data(config, heightmap, collisiondetector, red_or_green):
             else:
                 new_rotation = (0, 0, random.choice(rot_range))
             new_position = get_block_position(blocks_data, heightmap, collisiondetector, (0.5, 0.5, 1.5), new_rotation, red_or_green, 1)
+            if new_position is None:
+                return None, None, False
             block_data = {
                 'index' : i,
                 'color' : random.choice([key for key in color_dic.keys() if color_dic[key] > 0]),
@@ -719,7 +976,7 @@ def generate_blocks_data(config, heightmap, collisiondetector, red_or_green):
         color_dic[block_data['color']]-=1
         size_dic[block_data['size']]-=1
         blocks_data.append(block_data)
-    return blocks_data, ped_num
+    return blocks_data, ped_num, True
 
 def set_block_physics(obj):
     bpy.context.view_layer.objects.active = obj
@@ -729,10 +986,11 @@ def set_block_physics(obj):
 def no_physics_render(index, config_num_colors):
     #num_blocks = config_num_colors['yellow'] + config_num_colors['blue'] + config_num_colors['white']
     #for i in range(num_blocks):
-        #obj = bpy.data.objects[f'block_{i}']
-        #obj.rigid_body.type = 'PASSIVE'
+    #obj = bpy.data.objects[f'block_{i}']
+    #obj.rigid_body.type = 'PASSIVE'
     bpy.context.scene.render.filepath = OUTPUT_PATH + f"/{index}_{config_num_colors['yellow']}_{config_num_colors['blue']}_{config_num_colors['white']}.mp4"
     bpy.ops.render.render(animation=True, write_still=True)
+
 
 def physics_render(index, ped_num, config):
     """
@@ -740,7 +998,7 @@ def physics_render(index, ped_num, config):
     """
     if bpy.context.scene.rigidbody_world is None:
         raise ValueError("No rigidbody_world!")
-    
+
     num_blocks = config['Scene']['num_blocks']
     for i in range(num_blocks):
         obj = bpy.data.objects[f'block_{i}']
@@ -753,18 +1011,22 @@ def physics_render(index, ped_num, config):
     rigidbody_world.point_cache.frame_end = VIDEO_LEN * FPS
 
     bpy.ops.ptcache.bake_all(bake=True)
-    
+
     positions = []
     for i in range(num_blocks):
         obj = bpy.data.objects[f'block_{i}']
         bpy.context.scene.frame_set(VIDEO_LEN * FPS)
         loc = obj.matrix_world.to_translation()
         positions.append(loc)
-    tilt_color = get_final_tilt_color(positions, RED_OR_GREEN, ped_num)
-    bpy.context.scene.render.filepath = OUTPUT_PATH + f"/{index}_p_{tilt_color}.mp4"
-    
+    if STABILITY == "unstable":
+        tilt_color = get_final_tilt_color(positions, RED_OR_GREEN, ped_num)
+    else:
+        tilt_color = "stable"
+    bpy.context.scene.render.filepath = OUTPUT_PATH + f"/videos/{RED_OR_GREEN}_{num_blocks}_{STABILITY}_{index}_{tilt_color}.mp4"
+
     bpy.context.scene.frame_set(1)
     bpy.ops.render.render(animation=True, write_still=True)
+    return tilt_color
 
 def get_final_tilt_color(block_positions, red_or_green, ped_num):
     """
@@ -788,6 +1050,7 @@ def get_final_tilt_color(block_positions, red_or_green, ped_num):
         else:
             return 'green'
 
+
 def load_scene_config(yml_path='configs/config.yml'):
     """
     Load config and set up global variables.
@@ -795,50 +1058,390 @@ def load_scene_config(yml_path='configs/config.yml'):
     with open(yml_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    global SEED, INTERSECTION_THRESHOLD, FATNESS, NUM_SCENES, RED_OR_GREEN, VIDEO_LEN, FPS
+    global SEED, INTERSECTION_THRESHOLD, FATNESS, NUM_SCENES, RED_OR_GREEN, STABILITY, VIDEO_LEN, FPS
     global DEGREE, POINT
     global PROJECTION_X, PROJECTION_Y
     global ROT_DISCRETE
     global OUTPUT_PATH
-    
-    SEED = config['General'].get("SEED", 42) 
-    INTERSECTION_THRESHOLD = config['General'].get("INTERSECTION_THRESHOLD", 0.01)
+
+    SEED = config['General'].get("SEED", 42)
+    INTERSECTION_THRESHOLD = config['General'].get("INTERSECTION_THRESHOLD",
+                                                   0.01)
     FATNESS = config['General'].get("FATNESS", 0.5)
-    
+
     NUM_SCENES = config['General'].get("NUM_SCENES", 1)
     RED_OR_GREEN = config['General'].get("RED_OR_GREEN")
-    
+    STABILITY = config['General'].get("STABILITY")
+
     VIDEO_LEN = config['General'].get("VIDEO_LEN", 6)
     FPS = config['General'].get("FPS", 30)
-    
+
     DEGREE = config['General'].get("DEGREE", 10)
     POINT = config['General'].get("POINT", None)
-    
+
     PROJECTION_X = config['General'].get("PROJECTION_X", [-1.5, 2.5])
-    PROJECTION_Y = config['General'].get("PROJECTION_Y", [-1.5, 1.5])#(-0.75, 0.75)
+    PROJECTION_Y = config['General'].get("PROJECTION_Y",
+                                         [-1.5, 1.5])  #(-0.75, 0.75)
 
     ROT_DISCRETE = config['General'].get("ROT_DISCRETE", False)
-    
+
     OUTPUT_PATH = config['General'].get("OUTPUT_PATH")
-    
+
     random.seed(SEED)
     np.random.seed(SEED)
     return config
 
+# —— 工具：从对象获取世界空间的 8 顶点（复用之前的 CollisionDetector 逻辑）——
+def get_block_vertices_world(obj):
+    """
+    返回该 Blender 对象方块在世界坐标系下的 8 顶点（Vector 列表）
+    要求 obj 是你脚本中按尺寸生成的正方体/长方体“block_i”。
+    """
+    # 从对象拿到世界矩阵，将其局部包围盒点变换到世界
+    # 为与脚本一致，这里用基于尺寸与旋转的精确顶点生成：
+    size = obj.dimensions  # 世界尺寸（含缩放）
+    # 由于 dimensions 受旋转影响较复杂，采用碰撞器的做法：从中心与欧拉角构造
+    # 直接读脚本里的数据更稳：obj.location, obj.rotation_euler, 和“设计尺寸”
+    # 这里假设对象的“实际盒尺寸”为 obj.bound_box 计算更安全：
+    world_mat = obj.matrix_world
+    verts = [world_mat @ Vector(corner) for corner in obj.bound_box]  # 8 个角
+    return verts
+
+def convex_hull_polygon_xy(points):
+    """给一组三维点，投影到 x–y 平面，返回 shapely 的凸包多边形。"""
+    pts2d = [(p.x, p.y) for p in points]
+    try:
+        poly = Polygon(pts2d).convex_hull
+    except Exception:
+        poly = Polygon(pts2d)
+    return poly
+
+def convex_hull_polygon_xz(points):
+    """给一组三维点，投影到 x–z 平面，返回 shapely 的凸包多边形。"""
+    pts2d = [(p.x, p.z) for p in points]
+    try:
+        poly = Polygon(pts2d).convex_hull
+    except Exception:
+        poly = Polygon(pts2d)
+    return poly
+
+def block_center_world(obj):
+    """方块世界几何中心（用对象世界矩阵作用于局部原点）。"""
+    return (obj.matrix_world @ Vector((0,0,0)))
+
+def block_top_bottom_z(obj):
+    """返回该方块顶面/底面高度 (z_top, z_bot) —— 从 8 顶点得出。"""
+    verts = get_block_vertices_world(obj)
+    z_vals = [v.z for v in verts]
+    return (max(z_vals), min(z_vals))
+
+def list_blocks_in_scene():
+    """列出所有按脚本命名的方块对象。"""
+    return [obj for obj in bpy.data.objects if obj.name.startswith("block_")]  #
+
+# —— 1) N ——
+def compute_N():
+    return len(list_blocks_in_scene())
+
+# —— 2) H ——
+def compute_H():
+    H = 0.0
+    for obj in list_blocks_in_scene():
+        verts = get_block_vertices_world(obj)
+        H = max(H, max(v.z for v in verts))
+    return float(H)
+
+# —— 3) D（遮挡平均比例，沿 y 轴正交投影到 x–z）——
+def compute_D_front():
+    blocks = list_blocks_in_scene()
+    if not blocks:
+        return 0.0
+    # 为定义前后顺序：按中心 y 升序（小的在前，先遮挡后面的）
+    sorted_blocks = sorted(blocks, key=lambda o: block_center_world(o).y)
+    # 预先算每个块在 x–z 的投影与面积
+    proj_polys = {}
+    areas = {}
+    for obj in sorted_blocks:
+        poly = convex_hull_polygon_xz(get_block_vertices_world(obj))
+        proj_polys[obj.name] = poly
+        areas[obj.name] = max(poly.area, 1e-9)  # 防止除零
+
+    # 逐块累积“前方”并集，计算被遮挡面积
+    front_union = None
+    occluded_ratios = []
+    for obj in sorted_blocks:
+        poly = proj_polys[obj.name]
+        if front_union is None:
+            occluded_area = 0.0
+            front_union = poly
+        else:
+            inter = poly.intersection(front_union)
+            occluded_area = inter.area if not inter.is_empty else 0.0
+            front_union = unary_union([front_union, poly])
+        occluded_ratios.append(occluded_area / areas[obj.name])
+
+    return float(np.mean(occluded_ratios))
+
+def compute_D_back():
+    blocks = list_blocks_in_scene()
+    if not blocks:
+        return 0.0
+    # 为定义前后顺序：按中心 y 升序（小的在前，先遮挡后面的）
+    sorted_blocks = sorted(blocks, key=lambda o: block_center_world(o).y, reverse=True)
+    # 预先算每个块在 x–z 的投影与面积
+    proj_polys = {}
+    areas = {}
+    for obj in sorted_blocks:
+        poly = convex_hull_polygon_xz(get_block_vertices_world(obj))
+        proj_polys[obj.name] = poly
+        areas[obj.name] = max(poly.area, 1e-9)  # 防止除零
+
+    # 逐块累积“前方”并集，计算被遮挡面积
+    front_union = None
+    occluded_ratios = []
+    for obj in sorted_blocks:
+        poly = proj_polys[obj.name]
+        if front_union is None:
+            occluded_area = 0.0
+            front_union = poly
+        else:
+            inter = poly.intersection(front_union)
+            occluded_area = inter.area if not inter.is_empty else 0.0
+            front_union = unary_union([front_union, poly])
+        occluded_ratios.append(occluded_area / areas[obj.name])
+
+    return float(np.mean(occluded_ratios))
+
+# —— 4) G（所有方块中心的平均）——
+def compute_G():
+    blocks = list_blocks_in_scene()
+    if not blocks:
+        return (0.0, 0.0, 0.0)
+    centers = [block_center_world(o) for o in blocks]
+    x = sum(c.x for c in centers)/len(centers)
+    y = sum(c.y for c in centers)/len(centers)
+    z = sum(c.z for c in centers)/len(centers)
+    return (float(x), float(y), float(z))
+
+# —— 层解析：支撑面高度集合（按顶面 z）——
+def compute_layer_tops(eps=1e-4):
+    blocks = list_blocks_in_scene()
+    tops = []
+    for o in blocks:
+        z_top, _ = block_top_bottom_z(o)
+        tops.append(z_top)
+    tops.sort()
+    # 合并接近的层
+    merged = []
+    for z in tops:
+        if not merged or abs(z - merged[-1]) > eps:
+            merged.append(z)
+    return merged  # 由低到高
+
+# —— 构建“某层支撑平台”的 x–y 平面形状（由该层所有顶面的投影并集得到）——
+def support_polygon_xy_for_layer(layer_z, eps=1e-4):
+    polys = []
+    for o in list_blocks_in_scene():
+        z_top, _ = block_top_bottom_z(o)
+        if abs(z_top - layer_z) <= eps:
+            # 取该块顶面的四个顶点（z 接近 z_top 的顶点）
+            verts = get_block_vertices_world(o)
+            top_verts = [v for v in verts if abs(v.z - z_top) <= 1e-3]
+            if len(top_verts) >= 3:
+                polys.append(convex_hull_polygon_xy(top_verts))
+    if not polys:
+        return None
+    return unary_union(polys)
+
+# —— 5) LG：每层以上的子塔重心（序列，与层顺序对应）——
+def compute_LG():
+    layers = compute_layer_tops()
+    LG = []
+    blocks = list_blocks_in_scene()
+    for h in layers:
+        # 子塔 = 底面 >= 该层高度 的所有块
+        selected = []
+        for o in blocks:
+            _, z_bot = block_top_bottom_z(o)
+            if z_bot >= h - 1e-4:  # 兼容浮点
+                selected.append(block_center_world(o))
+        if selected:
+            cx = sum(p.x for p in selected)/len(selected)
+            cy = sum(p.y for p in selected)/len(selected)
+            cz = sum(p.z for p in selected)/len(selected)
+            LG.append((float(cx), float(cy), float(cz)))
+        else:
+            LG.append((None, None, None))
+    return LG
+
+# —— 6) S：对称性（按 x 轴，取各层平台左右外伸差的一半乘层高，再取最大）——
+def compute_S():
+    H_global = compute_H()
+    layers = compute_layer_tops()
+    best = 0.0
+    for h in layers:
+        poly = support_polygon_xy_for_layer(h)
+        if poly is None or poly.is_empty:
+            continue
+        # 用外接框近似左右最远点（也可用边界坐标直接求）
+        minx, miny, maxx, maxy = poly.bounds
+        cx, cy = poly.centroid.x, poly.centroid.y
+        x_left  = cx - minx
+        x_right = maxx - cx
+        sym_a = abs(x_left - x_right)/2.0 * h
+        best = max(best, sym_a)
+    return float(best)
+
+# —— 7) P：每层“顶层块”的几何中心到该层支撑平台几何中心的平均距离（序列）——
+def compute_P():
+    layers = compute_layer_tops()
+    P = []
+    blocks = list_blocks_in_scene()
+    for h in layers:
+        poly = support_polygon_xy_for_layer(h)
+        if poly is None or poly.is_empty:
+            P.append(None)
+            continue
+        c = poly.centroid
+        # 找到该层的“顶层块”（顶面高度≈h）
+        dists = []
+        for o in blocks:
+            z_top, _ = block_top_bottom_z(o)
+            if abs(z_top - h) <= 1e-4:
+                ctr = block_center_world(o)
+                # 投影到支撑面（x–y 即可），与平台几何中心距离
+                d = math.hypot(ctr.x - c.x, ctr.y - c.y)
+                dists.append(d)
+        if dists:
+            P.append(float(np.mean(dists)))
+        else:
+            P.append(None)
+    return P
+
+# —— 总入口：返回所有指标 ——
+def compute_tower_metrics():
+    return {
+        "N": compute_N(),
+        "H": compute_H(),
+        "D_front": compute_D_front(),
+        "D_back": compute_D_back(),
+        "G": compute_G(),
+        "LG": compute_LG(),
+        "S": compute_S(),
+        "P": compute_P(),
+    }
+
+def save_scene_metrics_to_json(index, features, output_dir, extra_info=None):
+    """
+    将当前场景的指标保存到一个 JSON 文件中。
+    Args:
+        index (int): 场景编号
+        features (dict): compute_tower_metrics() 的返回值
+        output_dir (str): 保存路径文件夹
+        extra_info (dict): 可选附加信息，如 {'tilt_color': 'red'}
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    json_path = os.path.join(output_dir, "tower_features.json")
+
+    # 如果文件已存在，读取旧内容
+    if os.path.exists(json_path):
+        with open(json_path, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = []
+    else:
+        data = []
+
+    # 组装一条新的记录
+    record = {
+        "scene_name": f"{RED_OR_GREEN}_{features['N']}_{STABILITY}_{index}",
+        "features": features,
+    }
+    if extra_info:
+        record.update(extra_info)
+
+    # 添加进数据列表
+    data.append(record)
+
+    # 写回文件
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+    print(f"场景 {index} 的属性已保存到 {json_path}")
+
+def save_block_data_to_json(index, blocks_data, num_blocks, output_dir="metrics"):
+    """
+    将当前场景的每个方块信息保存为 JSON 文件。
+    Args:
+        index (int): 场景编号
+        blocks_data (list[dict]): generate_blocks_data() 返回的方块列表
+        output_dir (str): 输出文件夹
+    """
+    import os, json
+    os.makedirs(output_dir, exist_ok=True)
+    json_path = os.path.join(output_dir, f"{RED_OR_GREEN}_{num_blocks}_{STABILITY}_{index}.json")
+
+    # 将所有 block 信息整理成纯数据结构
+    blocks_list = []
+    for block in blocks_data:
+        block_info = {
+            "index": block["index"],
+            "name": f"block_{block['index']}",
+            "position": list(map(float, block["position"])),
+            "rotation_euler": list(map(float, block["rotation"])),
+            "size": list(map(float, block["size"])),
+            "color": block["color"],
+            "material": block["material"]
+        }
+        blocks_list.append(block_info)
+
+    # 写入文件
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(blocks_list, f, indent=4, ensure_ascii=False)
+
+    print(f"场景 {index} 的方块信息已保存到 {json_path}")
+
+
 def main():
-    config_path = '/ceph/home/panchang/TowerTask/configs/config.yml'
+    config_path = 'F:\YXP\PhD\BlockTower\TowerTask\configs\config_green_19.yml'
     config = load_scene_config(config_path)
     config_num_colors = {}
     for key, value in config['Scene']['num_colors'].items():
         config_num_colors[key] = value
-    for i in range(NUM_SCENES):
+
+    # 统一特征采样器：D, S, Gx, Gy, Gz
+    sampler = FeatureSampler(
+        bins_DS=(6, 6),  # D × S 分 6×6 格
+        bins_G=(4, 4, 4),  # Gx × Gy × Gz 分 6×6×6 格
+        lims_D=(0.0, 0.6),
+        lims_S=(0.0, 0.8),
+        lims_Gx=(-1.5, 1.5),
+        lims_Gy=(-0.8, 0.8),
+        lims_Gz=(1.0, 5.0))
+
+    accepted = 0  # 已经“保留”的场景数（你真正要用的刺激数量）
+    attempt = 0  # 总的尝试次数（包括被丢弃的）
+
+    # for i in range(NUM_SCENES):
+    while accepted < NUM_SCENES:
+        print(
+            f"\n======== 生成尝试 {attempt} (已接受 {accepted}/{NUM_SCENES}) ========"
+        )
+
         clear_scene()
-        
+
         heightmap = Heightmap()
         collisiondetector = CollisionDetector()
         blocks_data = []
-        blocks_data, ped_num = generate_blocks_data(config, heightmap, collisiondetector, RED_OR_GREEN)
-        
+        blocks_data, ped_num, is_success = generate_blocks_data(
+            config, heightmap, collisiondetector, RED_OR_GREEN)
+
+        if not is_success:
+            print(f"❌ 丢弃场景 (尝试 {attempt})：没有符合特征分布的摆放方法")
+            attempt += 1
+            continue  # 重新生成一个新场景
+
         setup_render()
 
         create_mesh('PLANE')
@@ -848,11 +1451,69 @@ def main():
 
         setup_camera()
         setup_light()
-        
-        no_physics_render(i, config_num_colors)
-        physics_render(i, ped_num, config)
-        print(f"Finish creating scene {i}.")
+
+        # 如果塔在物理引擎中倒塌，直接丢弃，不进行特征计算
+        # 阈值设为 0.05 (5cm)，稍微的晃动允许，掉落不允许
+        if STABILITY == "stable":
+            if not check_stability_simulation(
+                    blocks_data, ped_num, threshold=0.05, frames=60):
+                print(f"⚠️ 丢弃场景 (尝试 {attempt})：积木塔不稳定")
+                attempt += 1
+                continue  # 重新开始循环
+        else:
+            if check_stability_simulation(blocks_data,
+                                          ped_num,
+                                          threshold=0.05,
+                                          frames=60):
+                print(f"⚠️ 丢弃场景 (尝试 {attempt})：积木塔不倒")
+                attempt += 1
+                continue  # 重新开始循环
+
+        feature_set = compute_tower_metrics()
+        D = (float(feature_set["D_front"]) + float(feature_set["D_back"])) / 2
+        S = float(feature_set["S"])
+        Gx, Gy, Gz = feature_set["G"]
+
+        # 用采样器判断是否接受该场景
+        if not sampler.accept_scene(
+                D, S, Gx, Gy, Gz, max_density_DS=4, max_density_G=3):
+            print(
+                f"⚠️ 丢弃场景 (尝试 {attempt})：D={D:.3f}, S={S:.3f}, G=({Gx:.3f}, {Gy:.3f}, {Gz:.3f})"
+            )
+            attempt += 1
+            continue  # 重新生成一个新场景
+
+        # ✅ 真正“保留”的场景 —— 用连续编号 accepted
+        print(
+            f"✅ 接受场景 {accepted}：D={D:.3f}, S={S:.3f}, G=({Gx:.3f}, {Gy:.3f}, {Gz:.3f})"
+        )
+
+        # no_physics_render(i, config_num_colors)
+        render_two_views(accepted, config, output_dir=f"{OUTPUT_PATH}/images")
+        setup_camera()
+        tilt_color = physics_render(accepted, ped_num, config)
+        print(f"Finish creating scene {accepted}.")
+
+        extra = {"tilt_color": tilt_color, "stability": STABILITY}
+        save_scene_metrics_to_json(accepted,
+                                   feature_set,
+                                   output_dir=OUTPUT_PATH,
+                                   extra_info=extra)
+
+        save_block_data_to_json(accepted, blocks_data, num_blocks=config['Scene'].get("num_blocks"), output_dir=f"{OUTPUT_PATH}/rawdata")
+
+        accepted += 1
+        attempt += 1
+
+        if attempt == 100000:
+            print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
+            break
+
+    sampler.save_distribution(OUTPUT_PATH, prefix="feature_distribution")
+    if accepted == NUM_SCENES:
+        print("🎯 所有场景生成完毕，并已尽量均匀覆盖 D, S, Gx, Gy, Gz 特征空间。")
+    else:
+        print("⚠️ 目前生成的场景已保存。")
 
 if __name__=="__main__":
     main()
-

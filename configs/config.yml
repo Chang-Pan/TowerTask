@@ -1,1 +1,27 @@
 # empty config for copy
+General:
+  SEED: 42
+  INTERSECTION_THRESHOLD: 0.01
+  FATNESS: 0.5
+  NUM_SCENES: 100   
+  RED_OR_GREEN: 'red' #'green'
+  STABILITY: 'unstable'
+  VIDEO_LEN: 6
+  FPS: 30
+  DEGREE: 15
+  POINT:
+  PROJECTION_X: [-3, 1]  #[-1, 3]
+  PROJECTION_Y: [-1.5, 1.5]
+  ROT_DISCRETE: False
+  OUTPUT_PATH: 'F:/YXP/PhD/BlockTower/TowerTask/TowerTaskVideos/red/19/unstable' 
+Scene:
+  num_blocks: 19
+  num_colors: 
+    yellow: 8
+    blue: 9
+    white: 2 
+  sizes: 
+    (0.5, 0.5, 1.5): 11
+    (1.5, 0.5, 0.5): 8
+  rot_range: [0, 360]
+  material: "wood"
