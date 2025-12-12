@@ -1497,7 +1497,19 @@ def save_block_data_to_json(index, blocks_data, num_blocks, output_dir="metrics"
 
 
 def main():
-    config_path = 'F:\YXP\PhD\BlockTower\TowerTask\configs\config_green_17.yml'
+    # 尝试从命令行参数获取 config 路径 (在 "--" 之后)
+    if "--" in sys.argv:
+        args = sys.argv[sys.argv.index("--") + 1:]
+        config_path = args[0]
+    else:
+        # 如果没有传入参数（比如你在Blender界面里直接点运行），使用默认路径测试
+        # 请确保这个路径是你存在的某个文件，用于调试
+        config_path = r'F:\YXP\PhD\BlockTower\TowerTask\configs\config.yml'
+
+    print(f"========================================")
+    print(f"正在加载配置文件: {config_path}")
+    print(f"========================================")
+
     config = load_scene_config(config_path)
     config_num_colors = {}
     for key, value in config['Scene']['num_colors'].items():
