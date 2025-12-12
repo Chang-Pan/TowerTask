@@ -3,7 +3,7 @@ General:
   INTERSECTION_THRESHOLD: 0.01
   FATNESS: 0.5
   NUM_SCENES: 100  
-  RED_OR_GREEN: 'green'
+  DARK_OR_LIGHT: 'light_gray'
   STABILITY: 'unstable'
   VIDEO_LEN: 6
   FPS: 30

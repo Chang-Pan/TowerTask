@@ -22,7 +22,10 @@ COLORS = {
     "orange": [1, 0.5, 0, 1],
     "white": [1, 1, 1, 1],
     "gray": [0.5, 0.5, 0.5, 1],
-    "black": [0, 0, 0, 1]
+    "black": [0, 0, 0, 1],
+    # --- 新增以下两行 ---
+    "dark_gray": [0.3, 0.3, 0.3, 1],   # 深灰 (替代红色区域)
+    "light_gray": [0.6, 0.6, 0.6, 1]      # 浅灰 (替代绿色区域)
     }
 
 MATERIALS = {
@@ -85,9 +88,9 @@ class Heightmap:
         polygon = Polygon(corners)
         return polygon
 
-    def calculate_plane(self, degree, red_or_green, point=None):
+    def calculate_plane(self, degree, gray_tone, point=None):
         degree = math.radians(degree)
-        if red_or_green == 'green':
+        if gray_tone == 'light_gray':
             normal = (-math.sin(degree), 0, math.cos(degree))
             if not point:
                 point = (-1.5, 0, 2.5)
@@ -103,8 +106,8 @@ class Heightmap:
         return a, b, c, d
 
 
-    def generate_points_on_plane(self, size, degree, red_or_green, n_points=20, noise_level=2):
-        a, b, c, d = self.calculate_plane(degree, red_or_green)
+    def generate_points_on_plane(self, size, degree, gray_tone, n_points=20, noise_level=2):
+        a, b, c, d = self.calculate_plane(degree, gray_tone)
 
         x = np.random.uniform(PROJECTION_X[0], PROJECTION_X[1], n_points)
         y = np.random.uniform(PROJECTION_Y[0], PROJECTION_Y[1], n_points)
@@ -140,24 +143,31 @@ class Heightmap:
         positions = [(float(x[i]), float(y[i]), float(processed_z[i])) for i in range(n_points)]
         return positions
 
-    def get_valid_positions(self, size, rotation, flag, red_or_green):
+    def get_valid_positions(self, size, rotation, flag, gray_tone):
         """Get all valid positions on the heightmap."""
         valid_counts = 0
         valid_positions = []
         while valid_counts < 80:
             if flag == 1:
-                if red_or_green == 'green':
-                    x = np.random.uniform(-1.5, 0)
-                else:
-                    x = np.random.uniform(0, 1.5)
+                # ==========================================
+                # 修改部分：基座生成逻辑
+                # ==========================================
+                # 原逻辑：根据 gray_tone 判断 x 范围是 (-1.5, 0) 还是 (0, 1.5)
+                # 新逻辑：无视 gray_tone，直接在分界线(x=0)附近随机生成
+                # 这里设置范围为 [-0.5, 0.5]，你可以根据需要调整这个宽度
+                x = np.random.uniform(-0.75, 0.75) 
+                
+                # y 轴范围保持不变
                 y = np.random.uniform(-0.75, 0.75)
                 z = 0.75
+                
                 position = (x, y, z)
                 new_polygon = self.get_polygon(position, size, rotation)
                 valid_positions.append(position)
                 valid_counts += 1
+                # ==========================================
             else:
-                positions = self.generate_points_on_plane(size, DEGREE, red_or_green)
+                positions = self.generate_points_on_plane(size, DEGREE, gray_tone)
                 for position in positions:
                     new_polygon = self.get_polygon(position, size, rotation)
                     pos_multipoly = self.height[position[2]-size[2]/2]
@@ -575,25 +585,61 @@ def create_camera_animation(camera, target_loc=(0, 0, 2.5)):
     bpy.ops.object.empty_add(type='PLAIN_AXES', location=target_loc)
     empty = bpy.context.object
     empty.name = "CameraTarget"
-
     camera.parent = empty
 
-    total_frames = VIDEO_LEN * FPS
+    # 计算各阶段帧数
+    rot_frames = ROTATION_LEN * FPS
+    phys_frames = VIDEO_LEN * FPS
+    
+    # 关键帧时间点
+    # 1. 第一阶段结束点 (旋转结束，准备开始物理)
+    t1 = rot_frames
+    # 2. 第二阶段结束点 (物理结束，准备开始最后旋转)
+    t2 = rot_frames + phys_frames
+    # 3. 总时长 (最后旋转结束)
+    total_frames = rot_frames + phys_frames + rot_frames
+    
     bpy.context.scene.frame_end = total_frames
 
-    for frame in [1, total_frames]:
-        bpy.context.scene.frame_set(frame)
+    # --- 设置关键帧 ---
+    
+    # 1. 初始状态 (Frame 1): 角度 0
+    empty.rotation_euler = (0, 0, 0)
+    empty.keyframe_insert(data_path="rotation_euler", frame=1)
 
-        if frame == 1:
-            empty.rotation_euler = (0, 0, 0)
-        else:
-            empty.rotation_euler = (0, 0, math.radians(360))
+    # 2. 第一阶段结束 (Frame t1): 旋转一圈 (360度)
+    empty.rotation_euler = (0, 0, math.radians(360))
+    empty.keyframe_insert(data_path="rotation_euler", frame=t1)
+    
+    # 3. 物理阶段保持视角 (Frame t1+1 到 t2): 
+    # 为了方便观察物理，通常保持静止，或者重置回正面。
+    # 这里我们让它重置回 0 度（正面）静止观察倒塌
+    # 如果你希望它接着刚才的 360 度继续转，可以删掉下面这块，但通常静止好观察。
+    
+    # 在物理开始时，切回 0 度 (或者你喜欢的固定角度)
+    empty.rotation_euler = (0, 0, 0) 
+    empty.keyframe_insert(data_path="rotation_euler", frame=t1+1)
+    
+    # 在物理结束时，依然保持 0 度
+    empty.rotation_euler = (0, 0, 0)
+    empty.keyframe_insert(data_path="rotation_euler", frame=t2)
 
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame)
+    # 4. 最后阶段结束 (Frame total): 再转一圈
+    empty.rotation_euler = (0, 0, math.radians(360))
+    empty.keyframe_insert(data_path="rotation_euler", frame=total_frames)
+
+    # --- 设置线性插值 (让旋转匀速，而不是由慢到快) ---
+    if empty.animation_data and empty.animation_data.action:
+        for fcurve in empty.animation_data.action.fcurves:
+            for kf in fcurve.keyframe_points:
+                kf.interpolation = 'LINEAR'
 
 def render_two_views(index, config, output_dir="renders", resolution=(800, 800)):
     """
-    从红绿分界线前后两个方向拍静态图；临时切换输出为 PNG，渲染后恢复原设置。
+    从分界线前后两个方向拍静态图；临时切换输出为 PNG，渲染后恢复原设置。
+    功能更新：
+    1. 动态调整相机高度(Z)和距离(Y)以适配塔的高度。
+    2. 使用 PNG 格式输出。
     """
     os.makedirs(output_dir, exist_ok=True)
     scene = bpy.context.scene
@@ -619,11 +665,26 @@ def render_two_views(index, config, output_dir="renders", resolution=(800, 800))
         for obj in list(bpy.data.objects):
             if obj.type == 'CAMERA':
                 bpy.data.objects.remove(obj, do_unlink=True)
+        
+        # === 动态相机位置计算 ===
+        # 1. 获取当前塔的最大高度
+        tower_height = compute_H()
+        if tower_height < 1.0: tower_height = 1.0 # 防止空场景或过矮导致的异常
 
-        # 两个观察位：沿 x=0 分界线，从 -Y 和 +Y 看向原点
+        # 2. 计算相机 Z 轴 (高度): 居中于塔的垂直中心
+        cam_z = tower_height / 2.0
+
+        # 3. 计算相机 Y 轴 (距离): 
+        # 为了防止塔太高超出镜头，距离需要随高度增加。
+        # 经验值：使用 2.0 倍塔高作为距离通常能覆盖默认镜头的垂直视野。
+        # 同时保留原有的 15 作为最小距离。
+        cam_dist = max(15.0, tower_height * 2.0)
+
+        # 定义两个视角：沿 x=0 分界线，分别从 -Y (Front) 和 +Y (Back) 看向中心
+        # 注意：rotation (90, 0, 0) 是水平向前看，配合 Z=tower_height/2 正好居中拍摄
         camera_positions = [
-            {"name": "front", "location": (0, -15, 3), "rotation": (math.radians(90), 0, 0)},
-            {"name": "back",  "location": (0,  15, 3), "rotation": (math.radians(90), 0, math.radians(180))},
+            {"name": "front", "location": (0, -cam_dist, cam_z), "rotation": (math.radians(90), 0, 0)},
+            {"name": "back",  "location": (0,  cam_dist, cam_z), "rotation": (math.radians(90), 0, math.radians(180))},
         ]
 
         for cam in camera_positions:
@@ -636,7 +697,7 @@ def render_two_views(index, config, output_dir="renders", resolution=(800, 800))
             cam_obj.rotation_euler = Euler(cam["rotation"], 'XYZ')
 
             # 设置输出路径（带 .png 后缀更稳）
-            img_path = os.path.join(output_dir, f"{RED_OR_GREEN}_{num_blocks}_{STABILITY}_{index}_{cam['name']}.png")
+            img_path = os.path.join(output_dir, f"{DARK_OR_LIGHT}_{num_blocks}_{STABILITY}_{index}_{cam['name']}.png")
             scene.render.filepath = img_path
 
             # 渲染静帧
@@ -741,24 +802,24 @@ def create_material(obj, color, mat_name):
     obj.data.update_tag()
     bpy.context.view_layer.update()
 
-def create_red_green_ground():
+def create_gray_ground():
     """
     Create ground. Add material and physics. Set up render settings.
     """
     bpy.ops.mesh.primitive_circle_add(vertices=100, radius=20, fill_type='TRIFAN', location=(0, 0, 0))
     ground = bpy.context.object
-    ground.name = "RedGreenGround"
+    ground.name = "GrayGround"
     mesh = ground.data
 
     vcol_layer = mesh.vertex_colors.new(name="Col")
     for poly in mesh.polygons[:len(mesh.polygons)//2]:
         for i in poly.loop_indices:
-            vcol_layer.data[i].color = COLORS['red']
+            vcol_layer.data[i].color = COLORS['dark_gray']
     for poly in mesh.polygons[len(mesh.polygons)//2:]:
         for i in poly.loop_indices:
-            vcol_layer.data[i].color = COLORS['green']
+            vcol_layer.data[i].color = COLORS['light_gray']
 
-    mat = bpy.data.materials.new(name="RedGreenMaterial")
+    mat = bpy.data.materials.new(name="GroundMaterial")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
@@ -842,7 +903,7 @@ def create_mesh(mesh_type, block_data=None):
         block_data: if 'BLOCK'
     """
     if mesh_type == 'PLANE':
-        create_red_green_ground()
+        create_gray_ground()
     elif mesh_type == 'BLOCK':
         generate_a_block(block_data)
 
@@ -872,15 +933,15 @@ def setup_render(resolution_x=800, resolution_y=800, samples=128):
     cycles.caustics_refractive = False
     cycles.use_transparent_shadows = False
 
-    bpy.context.scene.frame_start = 1
-    bpy.context.scene.frame_end = VIDEO_LEN * FPS
+    # bpy.context.scene.frame_start = 1
+    # bpy.context.scene.frame_end = VIDEO_LEN * FPS
 
     bpy.context.scene.render.image_settings.file_format = 'FFMPEG'
     bpy.context.scene.render.ffmpeg.format = 'MPEG4'
 
     bpy.context.scene.render.fps = FPS
 
-def get_block_position(existing_blocks, heightmap, collisiondetector, new_size, new_rot, red_or_green, flag=0):
+def get_block_position(existing_blocks, heightmap, collisiondetector, new_size, new_rot, gray_tone, flag=0):
     """
     Generate a block's position.
     Args:
@@ -889,10 +950,10 @@ def get_block_position(existing_blocks, heightmap, collisiondetector, new_size, 
         collisiondetector
         size: size of the current block
         new_rot: rotation of the current block
-        red_or_green: 'red' -> negative
+        gray_tone: 'dark_gray' -> negative
         flag: if it's pedestal then flag equals to 1
     """
-    valid_positions = heightmap.get_valid_positions(new_size, new_rot, flag, red_or_green)
+    valid_positions = heightmap.get_valid_positions(new_size, new_rot, flag, gray_tone)
     if not valid_positions:
         return None
         raise ValueError("No valid positions available for the block.")
@@ -908,7 +969,7 @@ def get_block_position(existing_blocks, heightmap, collisiondetector, new_size, 
     return None
     raise ValueError("No valid position found for the block after checking all options.")
 
-def generate_blocks_data(config, heightmap, collisiondetector, red_or_green):
+def generate_blocks_data(config, heightmap, collisiondetector, gray_tone):
     """
     Generate blocks data.
     Args:
@@ -944,7 +1005,7 @@ def generate_blocks_data(config, heightmap, collisiondetector, red_or_green):
                 new_rotation = (0, 0, random.uniform(rot_range[0], rot_range[1]))
             else:
                 new_rotation = (0, 0, random.choice(rot_range))
-            new_position = get_block_position(blocks_data, heightmap, collisiondetector, (0.5, 0.5, 1.5), new_rotation, red_or_green, 1)
+            new_position = get_block_position(blocks_data, heightmap, collisiondetector, (0.5, 0.5, 1.5), new_rotation, gray_tone, 1)
             if new_position is None:
                 return None, None, False
             block_data = {
@@ -964,7 +1025,7 @@ def generate_blocks_data(config, heightmap, collisiondetector, red_or_green):
                 new_rotation = (0, 0, random.uniform(rot_range[0], rot_range[1]))
             else:
                 new_rotation = (0, 0, random.choice(rot_range))
-            new_position = get_block_position(blocks_data, heightmap, collisiondetector, new_size, new_rotation, red_or_green)
+            new_position = get_block_position(blocks_data, heightmap, collisiondetector, new_size, new_rotation, gray_tone)
             block_data = {
                 'index' : i,
                 'color' : random.choice([key for key in color_dic.keys() if color_dic[key] > 0]),
@@ -994,61 +1055,91 @@ def no_physics_render(index, config_num_colors):
 
 def physics_render(index, ped_num, config):
     """
-    Bake and render.
+    Bake and render with distinct phases: Pre-Rotation -> Physics -> Post-Rotation.
     """
     if bpy.context.scene.rigidbody_world is None:
         raise ValueError("No rigidbody_world!")
 
     num_blocks = config['Scene']['num_blocks']
+    
+    # 添加刚体
     for i in range(num_blocks):
-        obj = bpy.data.objects[f'block_{i}']
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.rigidbody.object_add()
-        obj.rigid_body.type = 'ACTIVE'
+        obj = bpy.data.objects.get(f'block_{i}')
+        if obj:
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.rigidbody.object_add()
+            obj.rigid_body.type = 'ACTIVE'
+
+    # --- 计算时间轴 ---
+    rot_frames = ROTATION_LEN * FPS
+    phys_frames = VIDEO_LEN * FPS
+    total_frames = rot_frames + phys_frames + rot_frames
 
     rigidbody_world = bpy.context.scene.rigidbody_world
-    rigidbody_world.point_cache.frame_start = 1
-    rigidbody_world.point_cache.frame_end = VIDEO_LEN * FPS
+    
+    # [关键修改]: 设置物理模拟的起止帧
+    # 物理只在中间阶段运行。在 start 之前，物体会被 Blender 视为静止。
+    rigidbody_world.point_cache.frame_start = rot_frames + 1
+    rigidbody_world.point_cache.frame_end = rot_frames + phys_frames
 
+    # 烘焙物理
+    # 注意：烘焙时最好清除旧的
+    bpy.ops.ptcache.free_bake_all()
     bpy.ops.ptcache.bake_all(bake=True)
 
+    # --- 获取倒塌结果用于判断颜色 ---
+    # 我们需要在物理阶段结束的那一帧去检查位置
+    check_frame = rot_frames + phys_frames
+    
     positions = []
     for i in range(num_blocks):
-        obj = bpy.data.objects[f'block_{i}']
-        bpy.context.scene.frame_set(VIDEO_LEN * FPS)
-        loc = obj.matrix_world.to_translation()
-        positions.append(loc)
+        obj = bpy.data.objects.get(f'block_{i}')
+        if obj:
+            bpy.context.scene.frame_set(check_frame) # 跳转到物理结束帧
+            loc = obj.matrix_world.to_translation()
+            positions.append(loc)
+            
     if STABILITY == "unstable":
-        tilt_color = get_final_tilt_color(positions, RED_OR_GREEN, ped_num)
+        tilt_color = get_final_tilt_color(positions, DARK_OR_LIGHT, ped_num)
     else:
         tilt_color = "stable"
-    bpy.context.scene.render.filepath = OUTPUT_PATH + f"/videos/{RED_OR_GREEN}_{num_blocks}_{STABILITY}_{index}_{tilt_color}.mp4"
+    
+    # 设置渲染输出路径
+    bpy.context.scene.render.filepath = OUTPUT_PATH + f"/videos/{DARK_OR_LIGHT}_{num_blocks}_{STABILITY}_{index}_{tilt_color}.mp4"
 
-    bpy.context.scene.frame_set(1)
+    # --- 渲染设置 ---
+    bpy.context.scene.frame_start = 1
+    bpy.context.scene.frame_end = total_frames # 渲染所有三个阶段
+    
+    # 开始渲染
     bpy.ops.render.render(animation=True, write_still=True)
+    
+    # 渲染后清理物理缓存，防止影响下一个场景
+    bpy.ops.ptcache.free_bake_all()
+    
     return tilt_color
 
-def get_final_tilt_color(block_positions, red_or_green, ped_num):
+def get_final_tilt_color(block_positions, gray_tone, ped_num):
     """
     Args:
         block_positions: list, positions for all blocks after physics simulation
     """
     count = 0
     for p in block_positions:
-        if red_or_green == 'green':
+        if gray_tone == 'light_gray':
             if p[0] >= 0:
                 count += 1
         else:
             if p[0] <= 0:
                 count += 1
-    if count >= (len(block_positions)-ped_num) // 2:
-        return red_or_green
+    if count >= len(block_positions) // 2:
+        return gray_tone
     else:
         print("reverse")
-        if red_or_green == 'green':
-            return 'red'
+        if gray_tone == 'light_gray':
+            return 'dark_gray'
         else:
-            return 'green'
+            return 'light_gray'
 
 
 def load_scene_config(yml_path='configs/config.yml'):
@@ -1058,7 +1149,8 @@ def load_scene_config(yml_path='configs/config.yml'):
     with open(yml_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    global SEED, INTERSECTION_THRESHOLD, FATNESS, NUM_SCENES, RED_OR_GREEN, STABILITY, VIDEO_LEN, FPS
+    global SEED, INTERSECTION_THRESHOLD, FATNESS, NUM_SCENES, DARK_OR_LIGHT, STABILITY, VIDEO_LEN, FPS
+    global ROTATION_LEN
     global DEGREE, POINT
     global PROJECTION_X, PROJECTION_Y
     global ROT_DISCRETE
@@ -1070,10 +1162,11 @@ def load_scene_config(yml_path='configs/config.yml'):
     FATNESS = config['General'].get("FATNESS", 0.5)
 
     NUM_SCENES = config['General'].get("NUM_SCENES", 1)
-    RED_OR_GREEN = config['General'].get("RED_OR_GREEN")
+    DARK_OR_LIGHT = config['General'].get("DARK_OR_LIGHT")
     STABILITY = config['General'].get("STABILITY")
 
     VIDEO_LEN = config['General'].get("VIDEO_LEN", 6)
+    ROTATION_LEN = config['General'].get("ROTATION_LEN", 3)
     FPS = config['General'].get("FPS", 30)
 
     DEGREE = config['General'].get("DEGREE", 10)
@@ -1355,7 +1448,7 @@ def save_scene_metrics_to_json(index, features, output_dir, extra_info=None):
 
     # 组装一条新的记录
     record = {
-        "scene_name": f"{RED_OR_GREEN}_{features['N']}_{STABILITY}_{index}",
+        "scene_name": f"{DARK_OR_LIGHT}_{features['N']}_{STABILITY}_{index}",
         "features": features,
     }
     if extra_info:
@@ -1380,7 +1473,7 @@ def save_block_data_to_json(index, blocks_data, num_blocks, output_dir="metrics"
     """
     import os, json
     os.makedirs(output_dir, exist_ok=True)
-    json_path = os.path.join(output_dir, f"{RED_OR_GREEN}_{num_blocks}_{STABILITY}_{index}.json")
+    json_path = os.path.join(output_dir, f"{DARK_OR_LIGHT}_{num_blocks}_{STABILITY}_{index}.json")
 
     # 将所有 block 信息整理成纯数据结构
     blocks_list = []
@@ -1404,7 +1497,7 @@ def save_block_data_to_json(index, blocks_data, num_blocks, output_dir="metrics"
 
 
 def main():
-    config_path = 'F:\YXP\PhD\BlockTower\TowerTask\configs\config_green_19.yml'
+    config_path = 'F:\YXP\PhD\BlockTower\TowerTask\configs\config_green_17.yml'
     config = load_scene_config(config_path)
     config_num_colors = {}
     for key, value in config['Scene']['num_colors'].items():
@@ -1435,7 +1528,7 @@ def main():
         collisiondetector = CollisionDetector()
         blocks_data = []
         blocks_data, ped_num, is_success = generate_blocks_data(
-            config, heightmap, collisiondetector, RED_OR_GREEN)
+            config, heightmap, collisiondetector, DARK_OR_LIGHT)
 
         if not is_success:
             print(f"❌ 丢弃场景 (尝试 {attempt})：没有符合特征分布的摆放方法")
@@ -1505,7 +1598,7 @@ def main():
         accepted += 1
         attempt += 1
 
-        if attempt == 100000:
+        if attempt == 50000:
             print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
             break
 
