@@ -887,11 +887,15 @@ def generate_a_block(block_data):
     rot = block_data['rotation']
     mesh = create_block_mesh(size)
 
-    obj = bpy.data.objects.new(f"block_{index}", mesh)
-    obj.location = Vector(pos)
-    obj.rotation_euler = Euler(rot)
-    create_material(obj, color, mat_name)
-    bpy.context.scene.collection.objects.link(obj)
+    try:
+        obj = bpy.data.objects.new(f"block_{index}", mesh)
+        obj.location = Vector(pos)
+        obj.rotation_euler = Euler(rot)
+        create_material(obj, color, mat_name)
+        bpy.context.scene.collection.objects.link(obj)
+        return True
+    except Exception as e:
+        return False
 
     #set_block_physics(obj)
 
@@ -904,8 +908,9 @@ def create_mesh(mesh_type, block_data=None):
     """
     if mesh_type == 'PLANE':
         create_gray_ground()
+        return True
     elif mesh_type == 'BLOCK':
-        generate_a_block(block_data)
+        return generate_a_block(block_data)
 
 def setup_render(resolution_x=800, resolution_y=800, samples=128):
     """
@@ -1552,7 +1557,13 @@ def main():
         create_mesh('PLANE')
 
         for block_data in blocks_data:
-            create_mesh('BLOCK', block_data)
+            block_creation = create_mesh('BLOCK', block_data)
+            if not block_creation:
+                break
+        
+        if not block_creation:
+            print(f"❌ 丢弃场景 (尝试 {attempt})：无法生成新的物块")
+            continue
 
         setup_camera()
         setup_light()
