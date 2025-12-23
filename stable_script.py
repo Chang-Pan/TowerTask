@@ -208,15 +208,15 @@ class Heightmap:
                     
                     num_layers = len(self.height_list)
                     # 确定候选层数，最多往下看 3 层
-                    look_back = min(3, num_layers) 
+                    look_back = min(5, num_layers) 
                     
                     # 构造权重：越高的层概率越大，但也允许选低层
                     # 例如：如果有3层，权重可能是 [0.2, 0.3, 0.5]
                     candidate_indices = list(range(num_layers - look_back, num_layers))
                     # 简单的线性权重，层数越高权重越大
-                    weights = [i + 1 for i in range(len(candidate_indices))]
-                    total_w = sum(weights)
-                    probs = [w / total_w for w in weights]
+                    # weights = [i + 1 for i in range(len(candidate_indices))]
+                    # total_w = sum(weights)
+                    # probs = [w / total_w for w in weights]
                     
                     # chosen_idx = np.random.choice(candidate_indices, p=probs)
                     chosen_idx = np.random.choice(candidate_indices)
@@ -865,7 +865,7 @@ def render_six_views(index, config, output_dir="renders", resolution=(800, 800))
     tower_height = compute_H()
     if tower_height < 1.0: tower_height = 1.0
     cam_z = tower_height / 2.0
-    cam_dist = max(15.0, tower_height * 2.0) # 稍微拉远一点保证全景
+    cam_dist = max(15.0, tower_height * 1.9) # 稍微拉远一点保证全景
 
     # 定义6个角度 (0, 60, 120, 180, 240, 300)
     angles = [i * 60 for i in range(6)]
@@ -906,7 +906,7 @@ def render_six_views(index, config, output_dir="renders", resolution=(800, 800))
         # 地面初始状态：X>0 浅, X<0 深。分界线是 Y 轴。
         # 初始相机(0度)在 -Y 处看向 +Y。此时分界线正好把视野分成左(X<0)右(X>0)。
         # 当相机旋转 rad 度，地面也需要旋转 rad 度，才能保持分界线相对于相机不动。
-        if np.random.randint(2):
+        if np.random.randint(2) == 1:
             ground.rotation_euler.z = math.radians(deg+180)
         else:
             ground.rotation_euler.z = rad 
@@ -1346,7 +1346,7 @@ def physics_render_last_view(index, config):
     if scene.rigidbody_world:
         # 稳定的塔不需要预旋转阶段，或者缩短预旋转
         # 这里假设直接开始物理
-        total_frames = (VIDEO_LEN+1) * FPS
+        total_frames = VIDEO_LEN * FPS
         scene.rigidbody_world.point_cache.frame_start = 1
         scene.rigidbody_world.point_cache.frame_end = total_frames
         scene.frame_end = total_frames
@@ -1871,7 +1871,7 @@ def main():
 
         # no_physics_render(i, config_num_colors)
         cam_pos = render_six_views(accepted, config, output_dir=f"{OUTPUT_PATH}/images")
-        setup_camera(cam_loc=cam_pos, cam_rot=(0, 0, 0))
+        setup_camera(cam_loc=(0, -20, cam_pos[2]))
         physics_render_last_view(accepted, config)
         print(f"Finish creating scene {accepted}.")
 
