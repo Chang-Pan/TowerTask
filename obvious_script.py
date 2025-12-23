@@ -1516,6 +1516,7 @@ def main():
     print(f"========================================")
 
     config = load_scene_config(config_path)
+    num_blocks = config['Scene'].get("num_blocks")
     config_num_colors = {}
     for key, value in config['Scene']['num_colors'].items():
         config_num_colors[key] = value
@@ -1535,6 +1536,10 @@ def main():
 
     # for i in range(NUM_SCENES):
     while accepted < NUM_SCENES:
+        if os.path.exists(f"{OUTPUT_PATH}/rawdata/{DARK_OR_LIGHT}_{num_blocks}_{STABILITY}_{accepted}.json"):
+            accepted += 1
+            continue
+
         print(
             f"\n======== 生成尝试 {attempt} (已接受 {accepted}/{NUM_SCENES}) ========"
         )
@@ -1550,6 +1555,9 @@ def main():
         if not is_success:
             print(f"❌ 丢弃场景 (尝试 {attempt})：没有符合特征分布的摆放方法")
             attempt += 1
+            if attempt >= 3000:
+                print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
+                break
             continue  # 重新生成一个新场景
 
         setup_render()
@@ -1563,6 +1571,10 @@ def main():
         
         if not block_creation:
             print(f"❌ 丢弃场景 (尝试 {attempt})：无法生成新的物块")
+            attempt += 1
+            if attempt >= 3000:
+                print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
+                break
             continue
 
         setup_camera()
@@ -1572,17 +1584,24 @@ def main():
         # 阈值设为 0.05 (5cm)，稍微的晃动允许，掉落不允许
         if STABILITY == "stable":
             if not check_stability_simulation(
-                    blocks_data, ped_num, threshold=0.05, frames=60):
+                    blocks_data, ped_num, threshold=0.05, frames=40):
                 print(f"⚠️ 丢弃场景 (尝试 {attempt})：积木塔不稳定")
                 attempt += 1
+                if attempt >= 3000:
+                    print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
+                    break
+
                 continue  # 重新开始循环
         else:
             if check_stability_simulation(blocks_data,
                                           ped_num,
                                           threshold=0.05,
-                                          frames=60):
+                                          frames=40):
                 print(f"⚠️ 丢弃场景 (尝试 {attempt})：积木塔不倒")
                 attempt += 1
+                if attempt >= 3000:
+                    print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
+                    break
                 continue  # 重新开始循环
 
         feature_set = compute_tower_metrics()
@@ -1597,6 +1616,10 @@ def main():
                 f"⚠️ 丢弃场景 (尝试 {attempt})：D={D:.3f}, S={S:.3f}, G=({Gx:.3f}, {Gy:.3f}, {Gz:.3f})"
             )
             attempt += 1
+            if attempt >= 3000:
+                print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
+                break
+
             continue  # 重新生成一个新场景
 
         # ✅ 真正“保留”的场景 —— 用连续编号 accepted
@@ -1621,7 +1644,7 @@ def main():
         accepted += 1
         attempt += 1
 
-        if attempt == 50000:
+        if attempt >= 3000:
             print(f"❌ 无法采样到足够数量的场景 (已接受 {accepted}/{NUM_SCENES})")
             break
 
